@@ -1,72 +1,102 @@
 import streamlit as st
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langchain.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.chains import RetrievalQA
+from research_assistant import ResearchAssistant
 import os
-from tempfile import NamedTemporaryFile
-import google.generativeai as genai
+from dotenv import load_dotenv
 
-# Set Google API Key
-os.environ["GOOGLE_API_KEY"] = "AIzaSyC3iQpf0g8KHcXaNQ4RCioG6e_j8lzryyo"
-genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-llm = ChatGoogleGenerativeAI(
-    model="models/gemini-2.0-flash",
-    temperature=0,
-    google_api_key=os.environ["GOOGLE_API_KEY"]
+# Load environment variables
+load_dotenv()
+
+# Set page config
+st.set_page_config(
+    page_title="Research Assistant",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Streamlit UI
-st.title("📄 Document Q&A Bot with Gemini")
-st.write("Upload PDFs and ask questions about their content")
+def initialize_session_state():
+    """Initialize all necessary session state variables."""
+    if "assistant" not in st.session_state:
+        st.session_state.assistant = ResearchAssistant()
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    if "tool_usage" not in st.session_state:
+        st.session_state.tool_usage = {"Search": 0, "Python_REPL": 0}
 
-# File upload
-uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
+def display_chat_history():
+    """Display the chat history in the Streamlit app."""
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-# Initialize components
-@st.cache_resource
-def process_documents(files):
-    documents = []
-    for file in files:
-        with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(file.read())
-            loader = PyPDFLoader(tmp.name)
-            documents.extend(loader.load())
-        os.unlink(tmp.name)
+def display_sidebar():
+    """Display the sidebar with additional information."""
+    with st.sidebar:
+        st.title("About")
+        st.markdown("""
+        **Research Assistant** is an AI agent that can:
+        - Search for current information online
+        - Perform calculations using Python
+        - Remember our conversation
+        """)
+        
+        st.divider()
+        
+        st.subheader("Tool Usage Statistics")
+        for tool, count in st.session_state.tool_usage.items():
+            st.write(f"{tool}: {count} uses")
+        
+        st.divider()
+        
+        st.subheader("System Information")
+        st.write(f"Model: {st.session_state.assistant.llm.model_name}")
+        st.write("Memory: Enabled")
+        
+        st.divider()
+        
+        if st.button("Clear Conversation"):
+            st.session_state.chat_history = []
+            st.session_state.tool_usage = {"Search": 0, "Python_REPL": 0}
+            st.rerun()
 
-    # Split documents
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    texts = text_splitter.split_documents(documents)
+def track_tool_usage(response: str):
+    """Track which tools were used in the response."""
+    if "used Search" in response:
+        st.session_state.tool_usage["Search"] += 1
+    if "used Python_REPL" in response:
+        st.session_state.tool_usage["Python_REPL"] += 1
 
-    # Create embeddings and vector store
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    db = FAISS.from_documents(texts, embeddings)
+def main():
+    """Main function to run the Streamlit app."""
+    initialize_session_state()
+    
+    st.title("🔍 Research Assistant")
+    st.caption("A task-oriented AI agent with search, calculation, and memory capabilities")
+    
+    display_sidebar()
+    display_chat_history()
+    
+    # User input
+    if prompt := st.chat_input("What would you like to research or analyze?"):
+        # Add user message to chat history
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
+        
+        # Get assistant response
+        with st.spinner("Researching..."):
+            try:
+                response = st.session_state.assistant.query(prompt)
+                track_tool_usage(response)
+                
+                # Add assistant response to chat history
+                st.session_state.chat_history.append({"role": "assistant", "content": response})
+                
+                # Rerun to update the display
+                st.rerun()
+                
+            except Exception as e:
+                error_msg = f"Sorry, I encountered an error: {str(e)}"
+                st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                st.rerun()
 
-    return db
-
-# Question answering
-if uploaded_files:
-    db = process_documents(uploaded_files)
-    st.success(f"Processed {len(uploaded_files)} PDF(s). You can now ask questions!")
-
-    # Initialize Gemini with correct parameters
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.7)
-
-    # Check your prompt template for invalid fields (e.g., 'thought')
-    prompt = """Answer the question based on the context:
-    Context: {context}
-    Question: {query}
-    Answer:"""  # No 'thought' field here!
-
-    qa_chain = RetrievalQA.from_chain_type(llm, retriever=db.as_retriever())
-
-    # Question input
-    question = st.text_input("Ask a question about the document(s):")
-    if question:
-        with st.spinner("Thinking..."):
-            result = qa_chain({"query": question})
-            st.subheader("Answer")
-            st.write(result["result"])
-else:
-    st.info("Please upload PDF files to begin")
+if __name__ == "__main__":
+    main()
