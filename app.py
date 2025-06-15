@@ -1,102 +1,98 @@
 import streamlit as st
-#from research_assistant import ResearchAssistant
+from research_assistant import ResearchAssistant
 import os
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Set page config
+# Set page config (must be first Streamlit command)
 st.set_page_config(
-    page_title="Research Assistant",
+    page_title="🔍 Research Assistant",
     page_icon="🔍",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 def initialize_session_state():
-    """Initialize all necessary session state variables."""
-    if "assistant" not in st.session_state:
-        st.session_state.assistant = ResearchAssistant()
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    if "tool_usage" not in st.session_state:
-        st.session_state.tool_usage = {"Search": 0, "Python_REPL": 0}
+    """Initialize all session state variables with proper error handling"""
+    if "initialized" not in st.session_state:
+        try:
+            # Verify API key is available
+            if not os.getenv("OPENAI_API_KEY"):
+                st.error("OpenAI API key not configured. Please set it in Secrets (cloud) or .env (local)")
+                st.stop()
 
-def display_chat_history():
-    """Display the chat history in the Streamlit app."""
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-def display_sidebar():
-    """Display the sidebar with additional information."""
-    with st.sidebar:
-        st.title("About")
-        st.markdown("""
-        **Research Assistant** is an AI agent that can:
-        - Search for current information online
-        - Perform calculations using Python
-        - Remember our conversation
-        """)
-        
-        st.divider()
-        
-        st.subheader("Tool Usage Statistics")
-        for tool, count in st.session_state.tool_usage.items():
-            st.write(f"{tool}: {count} uses")
-        
-        st.divider()
-        
-        st.subheader("System Information")
-        st.write(f"Model: {st.session_state.assistant.llm.model_name}")
-        st.write("Memory: Enabled")
-        
-        st.divider()
-        
-        if st.button("Clear Conversation"):
+            # Initialize assistant only once
+            st.session_state.assistant = ResearchAssistant()
             st.session_state.chat_history = []
             st.session_state.tool_usage = {"Search": 0, "Python_REPL": 0}
+            st.session_state.initialized = True
+            
+        except Exception as e:
+            st.error(f"Failed to initialize assistant: {str(e)}")
+            st.stop()
+
+def display_chat():
+    """Display chat messages with avatar icons"""
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"], avatar="🔍" if msg["role"] == "assistant" else "👤"):
+            st.markdown(msg["content"])
+
+def display_sidebar():
+    """Sidebar with stats and controls"""
+    with st.sidebar:
+        st.title("Controls")
+        
+        # API status
+        st.markdown(f"**API Status:** {'✅ Connected' if os.getenv('OPENAI_API_KEY') else '❌ Disconnected'}")
+        
+        # Tool usage stats
+        st.subheader("Tool Usage")
+        for tool, count in st.session_state.tool_usage.items():
+            st.progress(count % 100, text=f"{tool}: {count} uses")
+        
+        # Clear conversation button
+        if st.button("♻️ Clear Conversation"):
+            st.session_state.chat_history = []
             st.rerun()
 
-def track_tool_usage(response: str):
-    """Track which tools were used in the response."""
+def track_tools(response: str):
+    """Track tool usage from agent response"""
     if "used Search" in response:
         st.session_state.tool_usage["Search"] += 1
     if "used Python_REPL" in response:
         st.session_state.tool_usage["Python_REPL"] += 1
 
 def main():
-    """Main function to run the Streamlit app."""
+    """Main app function"""
     initialize_session_state()
     
+    # Header
     st.title("🔍 Research Assistant")
-    st.caption("A task-oriented AI agent with search, calculation, and memory capabilities")
+    st.caption("Powered by LangChain + OpenAI")
     
+    # Layout
     display_sidebar()
-    display_chat_history()
+    display_chat()
     
     # User input
-    if prompt := st.chat_input("What would you like to research or analyze?"):
-        # Add user message to chat history
+    if prompt := st.chat_input("Ask me to research or calculate something..."):
+        # Add user message to history
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         
-        # Get assistant response
-        with st.spinner("Researching..."):
+        # Process with assistant
+        with st.spinner("Thinking..."):
             try:
                 response = st.session_state.assistant.query(prompt)
-                track_tool_usage(response)
-                
-                # Add assistant response to chat history
+                track_tools(response)
                 st.session_state.chat_history.append({"role": "assistant", "content": response})
-                
-                # Rerun to update the display
                 st.rerun()
-                
             except Exception as e:
-                error_msg = f"Sorry, I encountered an error: {str(e)}"
-                st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
-                st.rerun()
+                st.error(f"Agent error: {str(e)}")
+                st.session_state.chat_history.append({
+                    "role": "assistant", 
+                    "content": "Sorry, I encountered an error. Please try again."
+                })
 
 if __name__ == "__main__":
     main()
